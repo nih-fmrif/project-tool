@@ -10,7 +10,7 @@ import argparse
 import posix1e
 
 
-PROJECT_ROOT = "/fmrif/projects"    # modifiable on command line
+PROJECT_ROOT = os.environ.get('PROJECT_ROOT', '/fmrif/projects')
 OWNER_ROLE = "owner"
 MEMBER_ROLE = "member"
 COLLAB_ROLE = "collaborator"
@@ -56,11 +56,13 @@ def main():
 
     list_parser = subparsers.add_parser("list",
             help="list all projects",
+            epilog="Lists all projects found in PROJECT_ROOT",
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     list_parser.set_defaults(func=list_projects)
 
     create_parser = subparsers.add_parser("create",
             help="create new project",
+            epilog="Note that projects are 'private' by default",
             parents=[parent_parser],
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     create_parser.add_argument("--public", action="store_true",
@@ -69,21 +71,24 @@ def main():
 
     delete_parser = subparsers.add_parser("delete",
             help="delete existing project",
+            epilog="This will permanently delete the project directory!",
             parents=[parent_parser],
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     delete_parser.set_defaults(func=delete_project)
 
     info_parser = subparsers.add_parser("info",
             help="print information about project",
+            epilog="Prints information about a project",
             parents=[parent_parser],
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     info_parser.set_defaults(func=print_info)
 
-    refresh_parser = subparsers.add_parser("refresh",
-            help="refresh permissions on project",
+    update_parser = subparsers.add_parser("update",
+            help="update permissions on project",
+            epilog="Updates the permissions on everything in the project directory.",
             parents=[parent_parser],
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    refresh_parser.set_defaults(func=refresh_permissions)
+    update_parser.set_defaults(func=refresh_permissions)
 
     user_parser = argparse.ArgumentParser(add_help=False,
             parents=[parent_parser],
@@ -112,7 +117,22 @@ def main():
     del_user_parser.add_argument("username", help="user's UNIX username")
     del_user_parser.set_defaults(func=del_user)
 
+    help_parser = subparsers.add_parser('help',
+            help="print help info for command",
+            epilog="Prints the help information for the given command.",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    help_parser.add_argument("command", help="project command")
+
     args = parser.parse_args()
+
+    if args.which == 'help':
+        try:
+            subp = subparsers.choices[args.command]
+        except KeyError:
+            print("Invalid command: %s" % args.command)
+        else:
+            subp.print_help()
+        sys.exit(0)
 
     # determine username of user running this program (Unix)
     args.executer = pwd.getpwuid(os.getuid()).pw_name
@@ -175,7 +195,7 @@ def refresh_permissions(args):
 
     if (args.executer not in conf.members and args.executer not in conf.collaborators
             and args.executer != conf.owner):
-        fail("Only a project member may refresh the project's permissions")
+        fail("Only a project member may update the project's permissions")
 
     update_perms(conf)
 
