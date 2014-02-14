@@ -2,10 +2,8 @@ all: project manpage
 
 project: wrapper.c
 	gcc $< -o $@
-	# sudo chown root:root $@
-	# sudo chmod u+s $@
 
-project.1: project.md
+project.1: project.1.md
 	pandoc -s -t man $< > project.1
 	gzip -f project.1
 
