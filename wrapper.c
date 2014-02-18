@@ -1,5 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
+#include <errno.h>
 #include <unistd.h>
 
 const char script[] = "/usr/local/lib/project-manager.py";
@@ -10,13 +12,13 @@ int main(int argc, char** argv)
     uid_t euid = geteuid();
 
     if (euid != 0) {
-        fprintf(stderr, "Warning: not running with root privileges");
+        fprintf(stderr, "WARNING: not running with superuser privileges\n");
     }
 
     /* copy argument array and NULL terminate the argument array */
     char **args = malloc((argc + 1) * sizeof(*args));
     if (args == NULL) {
-        fprintf(stderr, "malloc error, uh oh\n");
+        fprintf(stderr, "Error: Failed to allocate memory\n");
         return EXIT_FAILURE;
     }
 
@@ -31,7 +33,15 @@ int main(int argc, char** argv)
 
     int ret = execvp(args[0], args);
     if (ret == -1) {
-        fprintf(stderr, "execvp error\n");
+        const char * msg;
+        switch (errno) {
+            case ENOENT:
+                msg = "Could not find project-manager.py.";
+                break;
+            default:
+                msg = strerror(errno);
+        }
+        fprintf(stderr, "ERROR: %s\n", msg);
         return EXIT_FAILURE;
     }
 
