@@ -4,6 +4,17 @@
 
 PyLibACL: https://github.com/iustin/pylibacl
 
+## Build
+
+Type `make` to build a binary that calls the Python program as well as a manpage.
+
+`make install` will install the binary in `/usr/local/bin`, the python program in
+`/usr/local/lib` and the manpage in `/usr/local/share/man/man1`)
+
+## Test
+
+Run the few existing tests: `make test` or `nosetests`
+
 ## Security Issues
 
 The setuid binary tool (owned by root) simply executes the Python script.

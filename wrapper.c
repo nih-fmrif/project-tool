@@ -4,7 +4,7 @@
 #include <errno.h>
 #include <unistd.h>
 
-const char script[] = "/usr/local/lib/project-manager.py";
+const char script[] = "/usr/local/lib/project_manager.py";
 
 int main(int argc, char** argv)
 {
@@ -36,7 +36,7 @@ int main(int argc, char** argv)
         const char * msg;
         switch (errno) {
             case ENOENT:
-                msg = "Could not find project-manager.py.";
+                msg = "Could not find project_manager.py.";
                 break;
             default:
                 msg = strerror(errno);

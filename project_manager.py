@@ -4,13 +4,18 @@ import sys
 import pwd
 import yaml
 import shutil
+import logging
 import argparse
 
-# pylibacl 0.5.1 (http://pylibacl.k1024.org/ or https://github.com/iustin/pylibacl)
+# pylibacl 0.5.1
+# Acquire from http://pylibacl.k1024.org/ or https://github.com/iustin/pylibacl
+# make all
+# sudo python setup.py install
 import posix1e
 
-
-PROJECT_ROOT = os.environ.get('PROJECT_ROOT', '/fmrif/projects')
+DEBUG = False
+PROJECT_ROOT = os.path.realpath(os.path.expanduser(
+        os.environ.get('PROJECT_ROOT', '/fmrif/projects')))
 OWNER_ROLE = "owner"
 MEMBER_ROLE = "member"
 COLLAB_ROLE = "collaborator"
@@ -37,7 +42,7 @@ class ProjectDB(object):
         return s
 
 def main():
-    global PROJECT_ROOT
+    global DEBUG, PROJECT_ROOT
     parser = argparse.ArgumentParser(
             prog="project",
             description="Manage projects",
@@ -45,6 +50,8 @@ def main():
 
     parser.add_argument("-P", "--project-root", metavar="<root>",
             help="project root directory")
+    parser.add_argument("-v", "--verbose", action="store_true", help="enable verbose output")
+    parser.add_argument("-d", "--debug", action="store_true",  help="enable debug mode")
     parser.set_defaults(project_root=PROJECT_ROOT,)
 
     subparsers = parser.add_subparsers(title="commands", dest="which",
@@ -125,11 +132,19 @@ def main():
 
     args = parser.parse_args()
 
+    if args.verbose:
+        logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
+    elif args.debug:
+        DEBUG = True
+        logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.DEBUG)
+    else:
+        logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.WARNING)
+
     if args.which == 'help':
         try:
             subp = subparsers.choices[args.command]
         except KeyError:
-            print("Invalid command: %s" % args.command)
+            logging.error("Invalid command: %s" % args.command)
         else:
             subp.print_help()
         sys.exit(0)
@@ -138,14 +153,14 @@ def main():
     args.executer = pwd.getpwuid(os.getuid()).pw_name
 
     if not os.path.isdir(args.project_root):
-        parser.error("Project root %s is not a directory." % args.project_root)
+        logging.error("Project root %s is not a directory." % args.project_root)
     PROJECT_ROOT = args.project_root
 
     args.func(args)
 
 
 def fail(msg):
-    sys.stderr.write("%s\n" % msg)
+    logging.error(msg)
     sys.exit(1)
 
 def list_projects(args):
@@ -156,7 +171,7 @@ def list_projects(args):
         if os.path.isdir(pdir) and os.path.isfile(pconf):
             projs.append(dirname)
     for proj in projs:
-        print(' '*4 + proj)
+        print(' ' * 4 + proj)
 
 def create_project(args):
     pdir = project_dir_path(args.project)
@@ -200,10 +215,19 @@ def refresh_permissions(args):
     update_perms(conf)
 
 def update_perms(conf):
-    # Yuck, specifying individual project directories here
     pdir = project_dir_path(conf.project)
     set_access(pdir, conf.owner, conf.members, conf.collaborators, conf.public)
     set_access(project_conf_path(conf.project), conf.owner, [], [], conf.public)
+
+def is_subdir(path, subdir):
+    path = os.path.realpath(os.path.expanduser(path))
+    subdir = os.path.realpath(os.path.expanduser(subdir))
+
+    if subdir == path:
+        return True
+    elif subdir == '/':
+        return False
+    return is_subdir(path, os.path.dirname(subdir))
 
 def set_access(root, owner, read_write, read_only, public):
     """
@@ -213,8 +237,12 @@ def set_access(root, owner, read_write, read_only, public):
     Recursively change the owner of all files to the project's owner.
     """
 
+    # Don't allow top-level files/dirs to be symbolic links
+    if os.path.islink(root):
+        fail("%s is a symbolic link. Cannot update ACL")
+
     # Owner always has read/write permissions
-    read_write.append(owner)
+    read_write.insert(0, owner)
 
     acl_text = 'u::rwx,g::rwx'
     if public:
@@ -236,12 +264,15 @@ def set_access(root, owner, read_write, read_only, public):
     apply_acl(root, acl)
 
     for top, dirs, files in os.walk(root):
-        for d in dirs:
-            path = os.path.join(top, d)
-            apply_acl(path, acl)
-        for f in files:
-            path = os.path.join(top, f)
-            apply_acl(path, acl)
+        for name in dirs + files:
+            path = os.path.join(top, name)
+            realpath = os.path.realpath(os.path.expanduser(path))
+            if is_subdir(PROJECT_ROOT, realpath):
+                apply_acl(path, acl)
+            else:
+                fail("%s is actually %s,\n"
+                        "which is outside PROJECT_ROOT (%s). "
+                        "Cannot continue." % (path, realpath, PROJECT_ROOT))
 
 def apply_acl(path, acl):
     if os.path.isdir(path):
