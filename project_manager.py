@@ -41,6 +41,25 @@ class ProjectDB(object):
         s += "Public: %s" % self.public
         return s
 
+    def save(self):
+        """Writes a project YAML config file to disk."""
+        stuff = {
+            "public":self.public,
+            "owner":self.owner,
+            "members":self.members,
+            "collaborators":self.collaborators
+        }
+        with open(project_conf_path(self.project), 'w') as fobj:
+            fobj.write(yaml.dump(stuff, default_flow_style=False))
+
+def load_conf(project_name):
+    """ Reads a project YAML config file and returns a ProjectDB instance."""
+    with open(project_conf_path(project_name)) as fobj:
+        loaded = yaml.load(fobj.read())
+    conf = ProjectDB(project_name, loaded['owner'], loaded['public'],
+            loaded['members'], loaded['collaborators'])
+    return conf
+
 def main():
     global DEBUG, PROJECT_ROOT
     parser = argparse.ArgumentParser(
@@ -184,7 +203,7 @@ def list_projects(args):
         else:
             # only append projects for which user has access
             try:
-                conf = read_project_conf_path(projname)
+                conf = load_conf(projname)
             except IOError:
                 continue    # no permission to read YAML
             users = [conf.owner] + conf.members + conf.collaborators
@@ -209,13 +228,13 @@ def create_project(args):
     conf = ProjectDB(args.project, args.executer, args.public)
 
     # this is the only place where we save the project config BEFORE updating permissions
-    write_project_conf_path(conf)
+    conf.save()
     update_perms(conf)
 
 def delete_project(args):
     check_project_exists(args.project)
 
-    conf = read_project_conf_path(args.project)
+    conf = load_conf(args.project)
     if conf.owner != args.executer:
         fail("Only the project owner can delete a project")
 
@@ -226,12 +245,12 @@ def delete_project(args):
 
 def print_info(args):
     check_project_exists(args.project)
-    conf = read_project_conf_path(args.project)
+    conf = load_conf(args.project)
     print(conf)
 
 def refresh_permissions(args):
     check_project_exists(args.project)
-    conf = read_project_conf_path(args.project)
+    conf = load_conf(args.project)
 
     if args.executer in conf.members or args.executer == conf.owner:
         update_perms(conf)
@@ -252,8 +271,11 @@ def update_perms(conf):
     logging.info("Updating ACL on project config file")
     set_access(pconf, conf.owner, [], [], conf.public)
 
+    # save the config file on disk
+    conf.save()
+
 def is_subdir(path, subdir):
-    """Tested in 'test_project_manager.py'"""
+    """Tested in `test_project_manager.py` but be wary"""
     path = os.path.realpath(os.path.expanduser(path))
     subdir = os.path.realpath(os.path.expanduser(subdir))
     if subdir == path:
@@ -325,14 +347,13 @@ def apply_acl(path, acl):
 
 def mod_user(args):
     check_project_exists(args.project)
-
     try:
         # "Look up" user
         pwd.getpwnam(args.username)
     except KeyError:
         fail("User %s is not a valid user" % args.username)
 
-    conf = read_project_conf_path(args.project)
+    conf = load_conf(args.project)
 
     if args.executer != conf.owner and args.executer not in conf.members:
         fail("Only a project owner/member can add/modify users")
@@ -369,18 +390,16 @@ def mod_user(args):
         conf.collaborators.append(args.username)
 
     update_perms(conf)
-    write_project_conf_path(conf)
 
 def del_user(args):
     check_project_exists(args.project)
-
     try:
         # "Look up" user
         pwd.getpwnam(args.username)
     except KeyError:
         fail("User %s is not a valid user" % args.username)
 
-    conf = read_project_conf_path(args.project)
+    conf = load_conf(args.project)
 
     if args.executer != conf.owner and args.executer not in conf.members:
         fail("Only a project owner/member can delete users")
@@ -395,15 +414,16 @@ def del_user(args):
         conf.collaborators.remove(args.username)
 
     update_perms(conf)
-    write_project_conf_path(conf)
 
 def check_project_exists(project_name):
     d = project_dir_path(project_name)
     c = project_conf_path(project_name)
     if not os.path.isdir(d):
-        fail("Project directory '%s' does not exist" % d)
+        fail("Project directory '%s' does not exist. %s is not a project" %
+                (d, project_name))
     if not os.path.isfile(c):
-        fail("Project config '%s' does not exist" % c)
+        fail("Project config '%s' does not exist. %s is not a project" % (
+            c, project_name))
 
 def project_dir_path(project_name):
     """
@@ -412,30 +432,11 @@ def project_dir_path(project_name):
     return os.path.join(PROJECT_ROOT, project_name)
 
 def project_conf_path(project_name):
-    """Dynamically forms a project's user database path
+    """Dynamically forms a project's user config file path
     Modify this function if you change the location of a project's DB.
     Constructs the path to a project's YAML config file
     """
     return os.path.join(PROJECT_ROOT, ".%s.yml" % project_name)
-
-def write_project_conf_path(conf):
-    """Writes a project YAML config file to disk."""
-    stuff = {
-        "public":conf.public,
-        "owner":conf.owner,
-        "members":conf.members,
-        "collaborators":conf.collaborators
-    }
-    with open(project_conf_path(conf.project), 'w') as fobj:
-        fobj.write(yaml.dump(stuff, default_flow_style=False))
-
-def read_project_conf_path(project_name):
-    """ Reads a project YAML config file and returns a ProjectDB instance."""
-    with open(project_conf_path(project_name)) as fobj:
-        loaded = yaml.load(fobj.read())
-    conf = ProjectDB(project_name, loaded['owner'], loaded['public'],
-            loaded['members'], loaded['collaborators'])
-    return conf
 
 
 if __name__ == "__main__":
