@@ -21,6 +21,16 @@ MEMBER_ROLE = "member"
 COLLAB_ROLE = "collaborator"
 ROLE_NAMES = [OWNER_ROLE, MEMBER_ROLE, COLLAB_ROLE]
 
+logger = logging.getLogger(__name__)
+
+class ColorFormatter(logging.Formatter):
+    black, red, green, yellow, blue, magenta, cyan, white = 0, 1, 2, 3, 4, 5, 6, 7
+    colors = { 'WARNING': yellow, 'INFO': blue, 'DEBUG': green, 'CRITICAL': magenta, 'ERROR': red }
+    def format(self, record):
+        record.levelname = "\033[1;%dm%s\033[0m" % (
+                30 + ColorFormatter.colors[record.levelname], record.levelname)
+        # can't use `super` here because Formatter is not a 'new-style' class
+        return logging.Formatter.format(self, record)
 
 class ProjectDB(object):
     def __init__(self, project, owner, public=False, members=[], collaborators=[]):
@@ -71,6 +81,7 @@ def main():
             help="project root directory")
     parser.add_argument("-v", "--verbose", action="store_true", help="enable verbose output")
     parser.add_argument("-d", "--debug", action="store_true",  help="enable debug mode")
+    parser.add_argument("--nocolor", action="store_true",  help="enable colors")
     parser.set_defaults(project_root=PROJECT_ROOT,)
 
     subparsers = parser.add_subparsers(title="commands", dest="which",
@@ -153,37 +164,44 @@ def main():
 
     args = parser.parse_args()
 
+    # set up loggin (i.e. fancy console output)
+    console = logging.StreamHandler()
+    formatter = logging.Formatter if args.nocolor else ColorFormatter
+    console.setFormatter(formatter("%(levelname)s: %(message)s"))
+    console.setLevel(logging.DEBUG)
+    logger.addHandler(console)
+
     if args.verbose:
-        logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
+        logger.setLevel(logging.INFO)
     elif args.debug:
         DEBUG = True
-        logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
     else:
-        logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.WARNING)
+        logger.setLevel(logging.WARNING)
 
     if args.which == 'help':
         try:
             subp = subparsers.choices[args.command]
         except KeyError:
-            logging.error("Invalid command: %s" % args.command)
+            logger.error("Invalid command: %s" % args.command)
         else:
             subp.print_help()
         sys.exit(0)
 
     # determine username of user running this program (Unix)
     args.executer = pwd.getpwuid(os.getuid()).pw_name
-    logging.debug("You are: %s" % args.executer)
+    logger.debug("You are: %s" % args.executer)
 
     if not os.path.isdir(args.project_root):
-        logging.error("Project root %s is not a directory." % args.project_root)
+        logger.error("Project root %s is not a directory." % args.project_root)
     PROJECT_ROOT = args.project_root
-    logging.info("PROJECT_ROOT: %s" % PROJECT_ROOT)
+    logger.info("PROJECT_ROOT: %s" % PROJECT_ROOT)
 
     args.func(args)
 
 
 def fail(msg):
-    logging.error(msg)
+    logger.error(msg)
     sys.exit(1)
 
 def list_projects(args):
@@ -192,10 +210,10 @@ def list_projects(args):
         pdir = os.path.join(PROJECT_ROOT, dirname)
         pconf = project_conf_path(dirname)
         if not os.path.isdir(pdir):
-            logging.debug("Unknown project: %s" % pdir)
+            logger.debug("Unknown project: %s" % pdir)
             continue
         if not os.path.isfile(pconf):
-            logging.debug("Unknown config file: %s" % pconf)
+            logger.debug("Unknown config file: %s" % pconf)
             continue
         projname = dirname
         if args.all:
@@ -222,9 +240,12 @@ def create_project(args):
     if os.path.isfile(pconf):
         fail("Project config '%s' already exists" % pconf)
 
-    logging.info("Creating directory: %s" % pdir)
-    os.mkdir(pdir)
-    logging.info("Creating config file: %s" % pconf)
+    logger.info("Creating directory: %s" % pdir)
+    try:
+        os.mkdir(pdir)
+    except OSError as e:
+        fail(e)
+    logger.info("Creating config file: %s" % pconf)
     conf = ProjectDB(args.project, args.executer, args.public)
 
     # this is the only place where we save the project config BEFORE updating permissions
@@ -238,9 +259,9 @@ def delete_project(args):
     if conf.owner != args.executer:
         fail("Only the project owner can delete a project")
 
-    logging.debug("Removing project directory")
+    logger.debug("Removing project directory")
     shutil.rmtree(project_dir_path(args.project))
-    logging.debug("Removing project config file")
+    logger.debug("Removing project config file")
     os.remove(project_conf_path(args.project))
 
 def print_info(args):
@@ -261,14 +282,14 @@ def update_perms(conf):
     pdir = project_dir_path(conf.project)
     pconf = project_conf_path(conf.project)
 
-    logging.info("Chown project directory: %s" % pdir)
+    logger.info("Chown project directory: %s" % pdir)
     os.chown(pdir, os.getuid(), os.getgid())
-    logging.info("Recursively updating ACL on project directory")
+    logger.info("Recursively updating ACL on project directory")
     set_access(pdir, conf.owner, conf.members, conf.collaborators, conf.public)
 
-    logging.info("Chown project config file: %s" % pconf)
+    logger.info("Chown project config file: %s" % pconf)
     os.chown(pconf, os.getuid(), os.getgid())
-    logging.info("Updating ACL on project config file")
+    logger.info("Updating ACL on project config file")
     set_access(pconf, conf.owner, [], [], conf.public)
 
     # save the config file on disk
@@ -313,7 +334,7 @@ def set_access(root, owner, read_write, read_only, public):
     acl.calc_mask()
 
     if not acl.valid():
-        logging.debug("Bad ACL: %s" % acl_text)
+        logger.debug("Bad ACL: %s" % acl_text)
         fail("Error generating ACL. Please notify system administrator.")
 
     apply_acl(root, acl)
@@ -325,12 +346,12 @@ def set_access(root, owner, read_write, read_only, public):
             if is_subdir(PROJECT_ROOT, realpath):
                 apply_acl(path, acl)
             else:
-                logging.warning(
+                logger.warning(
                         "%s is actually %s, which is not in $PROJECT_ROOT" %
                         (path, realpath))
 
 def apply_acl(path, acl):
-    logging.debug("Applying ACL to %s" % path)
+    logger.debug("Applying ACL to %s" % path)
     if os.path.isdir(path):
         try:
             posix1e.delete_default(path)
@@ -365,28 +386,28 @@ def mod_user(args):
             fail("Already project owner")
     elif args.username in conf.members:
         if args.role != MEMBER_ROLE:
-            logging.info("Removing %s from members" % args.username)
+            logger.info("Removing %s from members" % args.username)
             conf.members.remove(args.username)
         else:
             fail("Already a member")
     elif args.username in conf.collaborators:
         if args.role != COLLAB_ROLE:
-            logging.info("Removing %s from collaborators" % args.username)
+            logger.info("Removing %s from collaborators" % args.username)
             conf.collaborators.remove(args.username)
         else:
             fail("Already a collaborator")
 
     if args.role == "owner":
         prev_owner = conf.owner
-        logging.info("Setting %s as new owner" % args.username)
+        logger.info("Setting %s as new owner" % args.username)
         conf.owner = args.username
-        logging.info("Demoting previous owner %s" % prev_owner)
+        logger.info("Demoting previous owner %s" % prev_owner)
         conf.members.append(prev_owner)
     elif args.role == MEMBER_ROLE:
-        logging.info("Setting %s as member" % args.username)
+        logger.info("Setting %s as member" % args.username)
         conf.members.append(args.username)
     elif args.role == COLLAB_ROLE:
-        logging.info("Setting %s as collaborator" % args.username)
+        logger.info("Setting %s as collaborator" % args.username)
         conf.collaborators.append(args.username)
 
     update_perms(conf)
@@ -407,10 +428,10 @@ def del_user(args):
     if args.username == conf.owner:
         fail("Can't delete owner. Set a new owner first")
     if args.username in conf.members:
-        logging.info("Removing %s from members" % args.username)
+        logger.info("Removing %s from members" % args.username)
         conf.members.remove(args.username)
     if args.username in conf.collaborators:
-        logging.info("Removing %s from members" % args.username)
+        logger.info("Removing %s from members" % args.username)
         conf.collaborators.remove(args.username)
 
     update_perms(conf)
