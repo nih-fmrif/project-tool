@@ -7,10 +7,7 @@ import shutil
 import logging
 import argparse
 
-# pylibacl 0.5.1
-# Acquire from http://pylibacl.k1024.org/ or https://github.com/iustin/pylibacl
-# make all
-# sudo python setup.py install
+# pylibacl 0.5.2 from PyPi (pip install pylibacl - need python-devel,libacl-devel)
 import posix1e
 
 DEBUG = False
