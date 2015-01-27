@@ -73,40 +73,40 @@ help *COMMAND*
 
 # Examples
 
-1.  Create a project
+Create a project:
 
-        project create demo
+    project create demo
 
-    use the *--public* flag to make the project world-readable.
+use the *--public* flag to make the project world-readable.
 
-1.  List available projects
+List available projects:
 
-        project list
+    project list
 
-1. Add a user to a project
+Add a user to a project:
 
-      project adduser demo john member
-      project adduser demo mary collaborator
+    project adduser demo john member
+    project adduser demo mary collaborator
 
-1. Change a user's role
+Change a user's role:
 
-      project moduser demo john collaborator
+    project moduser demo john collaborator
 
-1. Remove a user from a project
+Remove a user from a project:
 
-      project deluser demo mary
+    project deluser demo mary
 
-1. Print information about a project
+Print information about a project:
 
-      project info demo
+    project info demo
 
-1. Fix permissions for a project
+Fix permissions for a project:
 
-      project update demo
+    project update demo
 
-1. Delete a project (use **very** carefully)
+Delete a project (use **very** carefully):
 
-      project delete demo
+    project delete demo
 
 # Bugs
 This tool is **setuid**. Run with caution.
