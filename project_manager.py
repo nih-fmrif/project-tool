@@ -96,6 +96,14 @@ def main():
             help="list ALL projects in PROJECT_ROOT")
     list_parser.set_defaults(func=list_projects)
 
+    check_parser = subparsers.add_parser("check",
+            help="check project permissions",
+            epilog="Checks the permissions on all projects to which you have access",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    check_parser.add_argument("-a", "--all", action="store_true",
+            help="check ALL projects in PROJECT_ROOT")
+    check_parser.set_defaults(func=check_projects)
+
     create_parser = subparsers.add_parser("create",
             help="create new project",
             epilog="Note that projects are 'private' by default",
@@ -201,8 +209,9 @@ def fail(msg):
     logger.error(msg)
     sys.exit(1)
 
-def list_projects(args):
-    projects = []
+def projects(username, all=False):
+    """ Yields each project name user `username` has access to,
+    or all project names if `all` is True."""
     for dirname in os.listdir(PROJECT_ROOT):
         pdir = os.path.join(PROJECT_ROOT, dirname)
         pconf = project_conf_path(dirname)
@@ -213,21 +222,77 @@ def list_projects(args):
             logger.debug("Unknown config file: %s" % pconf)
             continue
         projname = dirname
-        if args.all:
-            projects.append(projname)
+        if all:
+            yield projname
         else:
-            # only append projects for which user has access
+            # only yield projects for which user has access
             try:
                 conf = load_conf(projname)
             except IOError:
                 continue    # no permission to read YAML
             users = [conf.owner] + conf.members + conf.collaborators
-            for username in users:
-                if args.executer == username:
-                    projects.append(projname)
+            if username in users:
+                yield projname
 
-    for proj in projects:
+def list_projects(args):
+    """ Prints the name of each project the user has access to,
+    or all projects if `args.all` is True."""
+    for proj in projects(args.executer, args.all):
         print(' ' * 4 + proj)
+
+def check_projects(args):
+    for proj in projects(args.executer, args.all):
+        pdir = project_dir_path(proj)
+        pconf = project_conf_path(proj)
+        conf = load_conf(proj)
+
+        # check ACL on project config file
+        acl = posix1e.ACL(file=pconf)
+        if not acl.valid():
+            print("Project %s needs fixed, invalid ACL" % conf.project)
+            continue
+        text = acl.to_any_text()
+        if 'user:%s:rwx' % conf.owner not in text:
+            print("Project %s needs fixed, owner doesn't have permissions" % conf.project)
+            continue
+
+        # check access ACL on project directory
+        acl = posix1e.ACL(file=pdir)
+        if not _check_acl(acl, conf):
+            continue
+        # check default ACL on project directory
+        acl = posix1e.ACL(filedef=pdir)
+        if not _check_acl(acl, conf):
+            continue
+
+def _check_acl(acl, conf):
+    def member(u): return 'user:%s:rwx' % u
+    def collab(u): return 'user:%s:r-x' % u
+    public = 'other::r-x'
+    private = 'other::---'
+
+    if not acl.valid():
+        print("Project %s needs fixed, invalid ACL" % conf.project)
+        return False
+    text = acl.to_any_text()
+    if not member(conf.owner) in text:
+        print("Project %s needs fixed, owner doesn't have permissions" % conf.project)
+        return False
+    for m in conf.members:
+        if not member(m) in text:
+            print("Projects %s needs fixed, %s doesn't have permissions" % m)
+            return False
+    for c in conf.collaborators:
+        if not collab(c) in text:
+            print("Project %s needs fixed, %s doesn't have permissions" % c)
+            return False
+
+    if conf.public and not public in text:
+        print("Project %s needs fixed, world doesn't have access" % conf.project)
+        return False
+    elif not conf.public and not private in text:
+        print("Project %s needs fixed, world access not blocked" % conf.project)
+        return False
 
 def create_project(args):
     pdir = project_dir_path(args.project)
@@ -262,32 +327,56 @@ def delete_project(args):
     os.remove(project_conf_path(args.project))
 
 def print_info(args):
+    """ Display the contents of a project's configuration file."""
     check_project_exists(args.project)
     conf = load_conf(args.project)
     print(conf)
 
 def refresh_permissions(args):
+    """ Refresh the permissions on a project.
+
+    Note: anyone can refresh the permissions on any project because
+    the operation does not affect the project's owner/members/etc.
+    """
     check_project_exists(args.project)
     conf = load_conf(args.project)
-
-    if args.executer in conf.members or args.executer == conf.owner:
-        update_perms(conf)
-    else:
-        fail("Only a project owner/member may update its permissions")
+    update_perms(conf)
 
 def update_perms(conf):
+    """ Sets the UNIX owner/group of the project directory/config to the owner
+    of the project (chown). Recursively sets the ACLs on the config and entire
+    project directory.
+    """
     pdir = project_dir_path(conf.project)
     pconf = project_conf_path(conf.project)
 
+    uid, gid = 0, 0
+    try:
+        pw = pwd.getpwnam(conf.owner)
+        uid = pw.pw_uid
+        gid = pw.pw_gid
+    except KeyError:
+        fail("Failed to lookup user information for owner")
+
     logger.info("Chown project directory: %s" % pdir)
-    os.chown(pdir, os.getuid(), os.getgid())
-    logger.info("Recursively updating ACL on project directory")
-    set_access(pdir, conf.owner, conf.members, conf.collaborators, conf.public)
+    try:
+        os.chown(pdir, uid, gid)
+    except OSError:
+        fail("Failed to chown project directory")
 
     logger.info("Chown project config file: %s" % pconf)
-    os.chown(pconf, os.getuid(), os.getgid())
+    try:
+        os.chown(pconf, uid, gid)
+    except OSError:
+        fail("Failed to chown project config file")
+
+    # first update ACL on project config
     logger.info("Updating ACL on project config file")
     set_access(pconf, conf.owner, [], [], conf.public)
+
+    # update ACL on project directory and files
+    logger.info("Recursively updating ACL on project directory")
+    set_access(pdir, conf.owner, conf.members, conf.collaborators, conf.public)
 
     # save the config file on disk
     conf.save()
@@ -304,10 +393,10 @@ def is_subdir(path, subdir):
 
 def set_access(root, owner, read_write, read_only, public):
     """
-    Recursively change the owner of all files to the current user, since
+    Recursively changes the owner of all files to the current user, since
     only a file's owner can set its ACL.
-    Clear and reset the ACL for each file/directory in the project.
-    Recursively change the owner of all files to the project's owner.
+    Clears and resets the ACL for each file/directory in the project.
+    Recursively changes the owner of all files to the project's owner.
     """
     # Don't allow top-level files/dirs to be symbolic links
     if os.path.islink(root):
@@ -327,7 +416,10 @@ def set_access(root, owner, read_write, read_only, public):
     for user in read_only:
         acl_text += ',u:%s:r-x' % user
 
-    acl = posix1e.ACL(text=acl_text)
+    try:
+        acl = posix1e.ACL(text=acl_text)
+    except:
+        fail("Failed to create ACL. Check project config file for non-existent users")
     acl.calc_mask()
 
     if not acl.valid():

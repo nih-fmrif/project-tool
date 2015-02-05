@@ -109,7 +109,10 @@ Delete a project (use **very** carefully):
     project delete demo
 
 # Bugs
-This tool is **setuid**. Run with caution.
+
+- Project config files are created with rwx (0770) permissions.
+  The should be created with rw- (0660) permissions.
+- This tool is **setuid**. Run with caution.
 
 # See Also
 `chown(1)`, `getfacl(1)`, `setfacl(1)`
