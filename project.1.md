@@ -34,9 +34,16 @@ on your files manually using **setfacl**/**getfacl**, respectively.
 list
 :   list all projects
 
+check
+:   check that all project permissions are correct. This checks
+    every file in each project so it may take a while.
+
 create [*--public*] *PROJECT-NAME*
 :   Create new project. By default, projects are made 'private',
     i.e. they are NOT world-readable.
+
+rename *PROJECT-NAME* *NEW-NAME*
+:   Rename/Move a project within *PROJECT_ROOT*.
 
 delete *PROJECT-NAME*
 :   Delete existing project.
@@ -52,23 +59,24 @@ update *PROJECT-NAME*
     some file permissions, or if a project's configuration
     file is manually modified.
 
-adduser *PROJECT-NAME* *USERNAME* *ROLE*
+adduser *PROJECT-NAME* *ROLE* *USERNAME*...
 :   Add user to project, where *USERNAME* must be a valid
     username on the system, and role is one of:
         owner, member, collaborator
 
-moduser *PROJECT-NAME* *USERNAME* *ROLE*
+moduser *PROJECT-NAME* *ROLE* *USERNAME*...
 :   Modify user permissions, where *USERNAME* must be a valid
     username on the system, and role is one of:
         owner, member, collaborator
 
-deluser *PROJECT-NAME* *USERNAME*
+deluser *PROJECT-NAME* *USERNAME*...
 :   Remove user from project.
 
-help *COMMAND*
+help [*COMMAND*]
 :   Print help info for command
 
 # Environment
+
 **PROJECT_ROOT** - Parent directory of projects (defaults to */fmrif/projects*)
 
 # Examples
@@ -85,28 +93,28 @@ List available projects:
 
 Add a user to a project:
 
-    project adduser demo john member
-    project adduser demo mary collaborator
+    project adduser demo-project member john mary
+    project adduser demo-project collaborator jack
 
 Change a user's role:
 
-    project moduser demo john collaborator
+    project moduser demo-project collaborator john
 
 Remove a user from a project:
 
-    project deluser demo mary
+    project deluser demo-project mary
 
 Print information about a project:
 
-    project info demo
+    project info demo-project
 
 Fix permissions for a project:
 
-    project update demo
+    project update demo-project
 
 Delete a project (use **very** carefully):
 
-    project delete demo
+    project delete demo-project
 
 # Bugs
 

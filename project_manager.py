@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 import os
 import sys
 import pwd
@@ -86,7 +86,7 @@ def main():
 
     parent_parser = argparse.ArgumentParser(add_help=False,
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parent_parser.add_argument("project", help="name of project")
+    parent_parser.add_argument("project", metavar="project-name", help="name of project")
 
     list_parser = subparsers.add_parser("list",
             help="list projects",
@@ -113,6 +113,13 @@ def main():
             help="make project publicly readable")
     create_parser.set_defaults(func=create_project)
 
+    rename_parser = subparsers.add_parser("rename",
+            help="rename project",
+            parents=[parent_parser],
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    rename_parser.add_argument("new_name", metavar="new-name", help="new name for project")
+    rename_parser.set_defaults(func=rename_project)
+
     delete_parser = subparsers.add_parser("delete",
             help="delete existing project",
             epilog="This will permanently delete the project directory!",
@@ -129,7 +136,7 @@ def main():
 
     update_parser = subparsers.add_parser("update",
             help="update permissions on project",
-            epilog="Updates the permissions on everything in the project directory.",
+            epilog="Updates file permissions on the entire project",
             parents=[parent_parser],
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     update_parser.set_defaults(func=refresh_permissions)
@@ -137,10 +144,10 @@ def main():
     user_parser = argparse.ArgumentParser(add_help=False,
             parents=[parent_parser],
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    user_parser.add_argument("username", help="user's UNIX username")
     user_parser.add_argument("role", choices=ROLE_NAMES,
             #metavar="role",
             help="new user role")
+    user_parser.add_argument("username", nargs='+', help="user's UNIX username")
 
     add_user_parser = subparsers.add_parser("adduser",
             help="add user to project",
@@ -158,18 +165,18 @@ def main():
             help="remove user from project",
             parents=[parent_parser],
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    del_user_parser.add_argument("username", help="user's UNIX username")
+    del_user_parser.add_argument("username", nargs='+', help="user's UNIX username")
     del_user_parser.set_defaults(func=del_user)
 
     help_parser = subparsers.add_parser('help',
             help="print help info for command",
             epilog="Prints the help information for the given command.",
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    help_parser.add_argument("command", help="project command")
+    help_parser.add_argument("command", nargs='?', default=None, help="project command")
 
     args = parser.parse_args()
 
-    # set up loggin (i.e. fancy console output)
+    # set up logging (i.e. fancy console output)
     console = logging.StreamHandler()
     formatter = logging.Formatter if args.nocolor else ColorFormatter
     console.setFormatter(formatter("%(levelname)s: %(message)s"))
@@ -185,12 +192,16 @@ def main():
         logger.setLevel(logging.WARNING)
 
     if args.which == 'help':
-        try:
-            subp = subparsers.choices[args.command]
-        except KeyError:
-            logger.error("Invalid command: %s" % args.command)
+        # print main help
+        if args.command is None:
+            parser.print_help()
         else:
-            subp.print_help()
+            try:
+                subp = subparsers.choices[args.command]
+                subp.print_help()
+            except KeyError:
+                logger.error("Invalid command: %s" % args.command)
+                sys.exit(1)
         sys.exit(0)
 
     # determine username of user running this program (Unix)
@@ -202,6 +213,12 @@ def main():
     PROJECT_ROOT = args.project_root
     logger.info("PROJECT_ROOT: %s" % PROJECT_ROOT)
 
+    # strip all preceding directories from project name
+    # e.g. if user typed full path to project
+    if hasattr(args, 'project'):
+        args.project = os.path.basename(args.project)
+
+    # dispatch to user-specified command
     args.func(args)
 
 
@@ -209,7 +226,7 @@ def fail(msg):
     logger.error(msg)
     sys.exit(1)
 
-def projects(username, all=False):
+def projects_for_user(username, all=False):
     """ Yields each project name user `username` has access to,
     or all project names if `all` is True."""
     for dirname in os.listdir(PROJECT_ROOT):
@@ -237,11 +254,11 @@ def projects(username, all=False):
 def list_projects(args):
     """ Prints the name of each project the user has access to,
     or all projects if `args.all` is True."""
-    for proj in projects(args.executer, args.all):
+    for proj in projects_for_user(args.executer, args.all):
         print(' ' * 4 + proj)
 
 def check_projects(args):
-    for proj in projects(args.executer, args.all):
+    for proj in projects_for_user(args.executer, args.all):
         pdir = project_dir_path(proj)
         pconf = project_conf_path(proj)
         conf = load_conf(proj)
@@ -313,6 +330,23 @@ def create_project(args):
     # this is the only place where we save the project config BEFORE updating permissions
     conf.save()
     update_perms(conf)
+
+def rename_project(args):
+    check_project_exists(args.project)
+
+    conf = load_conf(args.project)
+    if conf.owner != args.executer:
+        fail("Only the project owner can rename a project")
+
+    # strip directories from new project name
+    args.new_name = os.path.basename(args.new_name)
+
+    new_project_dir = project_dir_path(args.new_name)
+    new_project_conf = project_conf_path(args.new_name)
+    logger.debug("Renaming project directory")
+    os.rename(project_dir_path(args.project), new_project_dir)
+    logger.debug("Renaming project config file")
+    os.rename(project_conf_path(args.project), new_project_conf)
 
 def delete_project(args):
     check_project_exists(args.project)
@@ -457,71 +491,73 @@ def apply_acl(path, acl):
 
 def mod_user(args):
     check_project_exists(args.project)
-    try:
-        # "Look up" user
-        pwd.getpwnam(args.username)
-    except KeyError:
-        fail("User %s is not a valid user" % args.username)
-
     conf = load_conf(args.project)
 
     if args.executer != conf.owner and args.executer not in conf.members:
         fail("Only a project owner/member can add/modify users")
 
-    if args.username == conf.owner:
-        if args.role != "owner":
-            fail("Can't remove permissions from owner. Set a new owner first")
-        else:
-            fail("Already project owner")
-    elif args.username in conf.members:
-        if args.role != MEMBER_ROLE:
-            logger.info("Removing %s from members" % args.username)
-            conf.members.remove(args.username)
-        else:
-            fail("Already a member")
-    elif args.username in conf.collaborators:
-        if args.role != COLLAB_ROLE:
-            logger.info("Removing %s from collaborators" % args.username)
-            conf.collaborators.remove(args.username)
-        else:
-            fail("Already a collaborator")
+    for username in args.username:
+        try:
+            # "Look up" user
+            pwd.getpwnam(username)
+        except KeyError:
+            fail("User %s is not a valid user" % username)
 
-    if args.role == "owner":
-        prev_owner = conf.owner
-        logger.info("Setting %s as new owner" % args.username)
-        conf.owner = args.username
-        logger.info("Demoting previous owner %s" % prev_owner)
-        conf.members.append(prev_owner)
-    elif args.role == MEMBER_ROLE:
-        logger.info("Setting %s as member" % args.username)
-        conf.members.append(args.username)
-    elif args.role == COLLAB_ROLE:
-        logger.info("Setting %s as collaborator" % args.username)
-        conf.collaborators.append(args.username)
+        if username == conf.owner:
+            if args.role != "owner":
+                fail("Can't remove permissions from owner. Set a new owner first")
+            else:
+                fail("Already project owner")
+        elif username in conf.members:
+            if args.role != MEMBER_ROLE:
+                logger.info("Removing %s from members" % username)
+                conf.members.remove(username)
+            else:
+                fail("Already a member")
+        elif username in conf.collaborators:
+            if args.role != COLLAB_ROLE:
+                logger.info("Removing %s from collaborators" % username)
+                conf.collaborators.remove(username)
+            else:
+                fail("Already a collaborator")
+
+        if args.role == "owner":
+            prev_owner = conf.owner
+            logger.info("Setting %s as new owner" % username)
+            conf.owner = username
+            logger.info("Demoting previous owner %s" % prev_owner)
+            conf.members.append(prev_owner)
+        elif args.role == MEMBER_ROLE:
+            logger.info("Setting %s as member" % username)
+            conf.members.append(username)
+        elif args.role == COLLAB_ROLE:
+            logger.info("Setting %s as collaborator" % username)
+            conf.collaborators.append(username)
 
     update_perms(conf)
 
 def del_user(args):
     check_project_exists(args.project)
-    try:
-        # "Look up" user
-        pwd.getpwnam(args.username)
-    except KeyError:
-        fail("User %s is not a valid user" % args.username)
-
     conf = load_conf(args.project)
 
     if args.executer != conf.owner and args.executer not in conf.members:
         fail("Only a project owner/member can delete users")
 
-    if args.username == conf.owner:
-        fail("Can't delete owner. Set a new owner first")
-    if args.username in conf.members:
-        logger.info("Removing %s from members" % args.username)
-        conf.members.remove(args.username)
-    if args.username in conf.collaborators:
-        logger.info("Removing %s from members" % args.username)
-        conf.collaborators.remove(args.username)
+    for username in args.username:
+        try:
+            # "Look up" user
+            pwd.getpwnam(username)
+        except KeyError:
+            fail("User %s is not a valid user" % username)
+
+        if username == conf.owner:
+            fail("Can't delete owner. Set a new owner first")
+        if username in conf.members:
+            logger.info("Removing %s from members" % username)
+            conf.members.remove(username)
+        if username in conf.collaborators:
+            logger.info("Removing %s from members" % username)
+            conf.collaborators.remove(username)
 
     update_perms(conf)
 
@@ -536,9 +572,7 @@ def check_project_exists(project_name):
             c, project_name))
 
 def project_dir_path(project_name):
-    """
-    Constructs the path to a project's directory
-    """
+    """ Constructs the path to a project's directory. """
     return os.path.join(PROJECT_ROOT, project_name)
 
 def project_conf_path(project_name):
