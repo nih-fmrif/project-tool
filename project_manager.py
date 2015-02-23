@@ -3,6 +3,7 @@ import os
 import sys
 import pwd
 import stat
+import glob
 import yaml
 import shutil
 import logging
@@ -62,11 +63,19 @@ class ProjectDB(object):
 
 def load_conf(project_name):
     """ Reads a project YAML config file and returns a ProjectDB instance."""
-    with open(project_conf_path(project_name)) as fobj:
-        loaded = yaml.load(fobj.read())
-    conf = ProjectDB(project_name, loaded['owner'], loaded['public'],
-            loaded['members'], loaded['collaborators'])
-    return conf
+    path = project_conf_path(project_name)
+    try:
+        with open(path) as fobj:
+            contents = fobj.read()
+    except IOError:
+        fail("Failed to read project config file: %s" % path)
+
+    try:
+        loaded = yaml.load(contents)
+        return ProjectDB(project_name, loaded['owner'], loaded['public'],
+                loaded['members'], loaded['collaborators'])
+    except:
+        fail("Invalid config file: %s" % path)
 
 def main():
     global DEBUG, PROJECT_ROOT
@@ -163,7 +172,7 @@ def main():
 
     check_parser = subparsers.add_parser("check",
             help="check project permissions",
-            epilog="Checks the permissions on all projects to which you have access",
+            epilog="Lists projects for which permissions should be fixed",
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     check_parser.add_argument("-a", "--all", action="store_true",
             help="check ALL projects in PROJECT_ROOT")
@@ -230,16 +239,16 @@ def fail(msg):
 def all_projects():
     """ Yields each project name user `username` has access to,
     or all project names if `all` is True."""
-    for dirname in os.listdir(PROJECT_ROOT):
-        pdir = os.path.join(PROJECT_ROOT, dirname)
-        pconf = project_conf_path(dirname)
+    for dirname in glob.glob(os.path.join(PROJECT_ROOT, '*')):
+        projname = os.path.basename(dirname)
+        pdir = project_dir_path(projname)
+        pconf = project_conf_path(projname)
         if not os.path.isdir(pdir):
-            logger.debug("Unknown project: %s" % pdir)
+            logger.debug("Project dir does not exist: %s" % pdir)
             continue
         if not os.path.isfile(pconf):
-            logger.debug("Unknown config file: %s" % pconf)
+            logger.debug("Project config does not exist: %s" % pconf)
             continue
-        projname = dirname
         yield projname
 
 def projects_for_user(username):
@@ -248,6 +257,7 @@ def projects_for_user(username):
         try:
             conf = load_conf(proj)
         except IOError:
+            logger.debug("can't load config for %s" % proj)
             continue    # no permission to read YAML
         users = [conf.owner] + conf.members + conf.collaborators
         if username in users:
@@ -262,7 +272,7 @@ def list_projects(args):
         projects = projects_for_user(args.executer)
 
     for proj in projects:
-        print(' ' * 4 + proj)
+        print(proj)
 
 def check_projects(args):
     if args.all:
@@ -278,50 +288,54 @@ def check_projects(args):
         # check ACL on project config file
         acl = posix1e.ACL(file=pconf)
         if not acl.valid():
-            print("Project %s needs fixed, invalid ACL" % conf.project)
+            print(conf.project)
+            logger.debug("%s needs fixed, invalid ACL" % conf.project)
             continue
         text = acl.to_any_text()
         if 'user:%s:rw-' % conf.owner not in text:
-            print("Project %s needs fixed, owner doesn't have permissions" % conf.project)
+            print(conf.project)
+            logger.debug("%s needs fixed, owner doesn't have permissions" % conf.project)
             continue
-
         # check access ACL on project directory
         acl = posix1e.ACL(file=pdir)
-        if not _check_acl(acl, conf):
+        ok, msg = _check_acl(acl, conf)
+        if not ok:
+            print(conf.project)
+            logger.debug(msg)
             continue
         # check default ACL on project directory
         acl = posix1e.ACL(filedef=pdir)
-        if not _check_acl(acl, conf):
+        ok, msg = _check_acl(acl, conf)
+        if not ok:
+            print(conf.project)
+            logger.debug(msg)
             continue
 
 def _check_acl(acl, conf):
+    """Returns  (True, "") if everything is good, otherwise
+                (False, debug message) """
     def member(u): return 'user:%s:rwx' % u
     def collab(u): return 'user:%s:r-x' % u
     public = 'other::r-x'
     private = 'other::---'
 
     if not acl.valid():
-        print("Project %s needs fixed, invalid ACL" % conf.project)
-        return False
+        return False, "%s needs fixed, invalid ACL" % conf.project
     text = acl.to_any_text()
     if not member(conf.owner) in text:
-        print("Project %s needs fixed, owner doesn't have permissions" % conf.project)
-        return False
+        return False, "%s needs fixed, owner doesn't have permissions" % conf.project
     for m in conf.members:
         if not member(m) in text:
-            print("Projects %s needs fixed, %s doesn't have permissions" % m)
-            return False
+            return False, "%s needs fixed, %s doesn't have permissions" % m
     for c in conf.collaborators:
         if not collab(c) in text:
-            print("Project %s needs fixed, %s doesn't have permissions" % c)
-            return False
+            return False, "%s needs fixed, %s doesn't have permissions" % c
 
     if conf.public and not public in text:
-        print("Project %s needs fixed, world doesn't have access" % conf.project)
-        return False
+        return False, "%s needs fixed, world doesn't have access" % conf.project
     elif not conf.public and not private in text:
-        print("Project %s needs fixed, world access not blocked" % conf.project)
-        return False
+        return False, "%s needs fixed, world access not blocked" % conf.project
+    return True, ""
 
 def create_project(args):
     pdir = project_dir_path(args.project)
@@ -505,7 +519,12 @@ def stats(path):
 
 def apply_acl(path, ro, rw, rx, rwx):
     logger.debug("Applying ACL to %s" % path)
-    isdir, readable, writable, executable = stats(path)
+    try:
+        isdir, readable, writable, executable = stats(path)
+    except OSError:
+        logger.error("Can't determine permissions of: %s" % path)
+        return
+
     acl = None
     if isdir:
         acl = rwx
@@ -523,15 +542,15 @@ def apply_acl(path, ro, rw, rx, rwx):
         try:
             posix1e.delete_default(path)
         except:
-            fail("Can't reset ACL on directory: %s" % path)
+            logger.warning("Can't reset ACL on directory: %s" % path)
         try:
             acl.applyto(path, posix1e.ACL_TYPE_DEFAULT)
         except:
-            fail("Can't update ACL on directory: %s" % path)
+            logger.warning("Can't update ACL on directory: %s" % path)
     try:
         acl.applyto(path)
     except:
-        fail("Can't update ACL on file: %s" % path)
+        logger.warning("Can't update ACL on file: %s" % path)
 
 def mod_user(args):
     check_project_exists(args.project)

@@ -112,6 +112,10 @@ Fix permissions for a project:
 
     project update demo-project
 
+Fix permissions for all projects having broken permissions:
+
+    project check | xargs -n 1 project update
+
 Delete a project (use **very** carefully):
 
     project delete demo-project
@@ -120,7 +124,15 @@ Delete a project (use **very** carefully):
 
 - Project config files are created with rwx (0770) permissions.
   The should be created with rw- (0660) permissions.
-- This tool is **setuid**. Run with caution.
+
+# Security Issues
+
+This tool has its setuid bit set and is owned by root
+(like ``top``, ``ps``, ``traceroute``, etc.). This allows the tool
+to effectively run as root, even when a regular user executes it.
+This, in general, is dangerous if not handled correctly. The tool is
+designed to not run arbitrary code, however it is capable of deleting
+any directory if a *valid* configuration file can be found.
 
 # See Also
 `chown(1)`, `getfacl(1)`, `setfacl(1)`
