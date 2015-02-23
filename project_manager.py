@@ -2,6 +2,7 @@
 import os
 import sys
 import pwd
+import stat
 import yaml
 import shutil
 import logging
@@ -88,22 +89,6 @@ def main():
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parent_parser.add_argument("project", metavar="project-name", help="name of project")
 
-    list_parser = subparsers.add_parser("list",
-            help="list projects",
-            epilog="Lists all projects to which you have access",
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    list_parser.add_argument("-a", "--all", action="store_true",
-            help="list ALL projects in PROJECT_ROOT")
-    list_parser.set_defaults(func=list_projects)
-
-    check_parser = subparsers.add_parser("check",
-            help="check project permissions",
-            epilog="Checks the permissions on all projects to which you have access",
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    check_parser.add_argument("-a", "--all", action="store_true",
-            help="check ALL projects in PROJECT_ROOT")
-    check_parser.set_defaults(func=check_projects)
-
     create_parser = subparsers.add_parser("create",
             help="create new project",
             epilog="Note that projects are 'private' by default",
@@ -168,6 +153,22 @@ def main():
     del_user_parser.add_argument("username", nargs='+', help="user's UNIX username")
     del_user_parser.set_defaults(func=del_user)
 
+    list_parser = subparsers.add_parser("list",
+            help="list projects",
+            epilog="Lists all projects to which you have access",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    list_parser.add_argument("-a", "--all", action="store_true",
+            help="list ALL projects in PROJECT_ROOT")
+    list_parser.set_defaults(func=list_projects)
+
+    check_parser = subparsers.add_parser("check",
+            help="check project permissions",
+            epilog="Checks the permissions on all projects to which you have access",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    check_parser.add_argument("-a", "--all", action="store_true",
+            help="check ALL projects in PROJECT_ROOT")
+    check_parser.set_defaults(func=check_projects)
+
     help_parser = subparsers.add_parser('help',
             help="print help info for command",
             epilog="Prints the help information for the given command.",
@@ -226,7 +227,7 @@ def fail(msg):
     logger.error(msg)
     sys.exit(1)
 
-def projects_for_user(username, all=False):
+def all_projects():
     """ Yields each project name user `username` has access to,
     or all project names if `all` is True."""
     for dirname in os.listdir(PROJECT_ROOT):
@@ -239,26 +240,37 @@ def projects_for_user(username, all=False):
             logger.debug("Unknown config file: %s" % pconf)
             continue
         projname = dirname
-        if all:
-            yield projname
-        else:
-            # only yield projects for which user has access
-            try:
-                conf = load_conf(projname)
-            except IOError:
-                continue    # no permission to read YAML
-            users = [conf.owner] + conf.members + conf.collaborators
-            if username in users:
-                yield projname
+        yield projname
+
+def projects_for_user(username):
+    for proj in all_projects():
+        # only yield projects for which user has access
+        try:
+            conf = load_conf(proj)
+        except IOError:
+            continue    # no permission to read YAML
+        users = [conf.owner] + conf.members + conf.collaborators
+        if username in users:
+            yield proj
 
 def list_projects(args):
     """ Prints the name of each project the user has access to,
     or all projects if `args.all` is True."""
-    for proj in projects_for_user(args.executer, args.all):
+    if args.all:
+        projects = all_projects()
+    else:
+        projects = projects_for_user(args.executer)
+
+    for proj in projects:
         print(' ' * 4 + proj)
 
 def check_projects(args):
-    for proj in projects_for_user(args.executer, args.all):
+    if args.all:
+        projects = all_projects()
+    else:
+        projects = projects_for_user(args.executer)
+
+    for proj in projects:
         pdir = project_dir_path(proj)
         pconf = project_conf_path(proj)
         conf = load_conf(proj)
@@ -269,7 +281,7 @@ def check_projects(args):
             print("Project %s needs fixed, invalid ACL" % conf.project)
             continue
         text = acl.to_any_text()
-        if 'user:%s:rwx' % conf.owner not in text:
+        if 'user:%s:rw-' % conf.owner not in text:
             print("Project %s needs fixed, owner doesn't have permissions" % conf.project)
             continue
 
@@ -436,46 +448,78 @@ def set_access(root, owner, read_write, read_only, public):
     if os.path.islink(root):
         fail("%s is a symbolic link. Cannot update ACL")
 
-    acl_text = 'u::rwx,g::rwx'
-    if public:
-        acl_text += ',o::r-x'
-    else:
-        acl_text += ',o::---'
+    texts = []
+    for x in ('-', 'x'):
+        for w in ('-', 'w'):
+            pieces = ['u::r%s%s,g::r%s%s' % (w, x, w, x)]
+            if public:
+                pieces.append(',o::r-%s' % x)
+            else:
+                pieces.append(',o::---')
 
-    # Owners and Members have read/write
-    writers = read_write + [owner]
-    for user in writers:
-        acl_text += ',u:%s:rwx' % user
-    # Collaborators have read-only
-    for user in read_only:
-        acl_text += ',u:%s:r-x' % user
+            # Owners and Members have read/write
+            writers = read_write + [owner]
+            for user in writers:
+                pieces.append(',u:%s:r%s%s' % (user, w, x))
+            # Collaborators have read-only
+            for user in read_only:
+                pieces.append(',u:%s:r-%s' % (user, x))
 
-    try:
-        acl = posix1e.ACL(text=acl_text)
-    except:
-        fail("Failed to create ACL. Check project config file for non-existent users")
-    acl.calc_mask()
+            texts.append(''.join(pieces))
 
-    if not acl.valid():
-        logger.debug("Bad ACL: %s" % acl_text)
-        fail("Error generating ACL. Please notify system administrator.")
+    gen = []
+    for text in texts:
+        try:
+            acl = posix1e.ACL(text=text)
+        except:
+            fail("Failed to create ACL. Check project config file for non-existent users")
+        acl.calc_mask()
 
-    apply_acl(root, acl)
+        if not acl.valid():
+            logger.debug("Bad ACL: %s" % text)
+            fail("Error generating ACL. Please notify system administrator.")
+        gen.append(acl)
+
+    ro, rw, rx, rwx = gen[0], gen[1], gen[2], gen[3]
+
+    apply_acl(root, ro, rw, rx, rwx)
 
     for top, dirs, files in os.walk(root):
         for name in dirs + files:
             path = os.path.join(top, name)
             realpath = os.path.realpath(os.path.expanduser(path))
             if is_subdir(PROJECT_ROOT, realpath):
-                apply_acl(path, acl)
+                apply_acl(path, ro, rw, rx, rwx)
             else:
                 logger.warning(
                         "%s is actually %s, which is not in $PROJECT_ROOT" %
                         (path, realpath))
 
-def apply_acl(path, acl):
+def stats(path):
+    mode = os.stat(path).st_mode
+    isdir = stat.S_ISDIR(mode)
+    readable = mode & (stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH) != 0
+    writable = mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH) != 0
+    executable = mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH) != 0
+    return isdir, readable, writable, executable
+
+def apply_acl(path, ro, rw, rx, rwx):
     logger.debug("Applying ACL to %s" % path)
-    if os.path.isdir(path):
+    isdir, readable, writable, executable = stats(path)
+    acl = None
+    if isdir:
+        acl = rwx
+    elif writable:
+        if executable:
+            acl = rwx
+        else:
+            acl = rw
+    elif executable:
+        acl = rx
+    else:
+        acl = ro
+
+    if isdir:
         try:
             posix1e.delete_default(path)
         except:
