@@ -61,8 +61,8 @@ __project_complete_projects ()
 {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local root="/fmrif/projects"
-    #local projects=$(\ls ${root}/.*.yml | sed "s/${root}\/\.\(.\+\)\.yml/\1/g")
-    local projects=$(find /fmrif/projects/ -maxdepth 1 -type f -name "*.yml" -printf '%f\n' | sed 's/\.\(.\+\)\.yml/\1/g')
+    #local projects=$(find /fmrif/projects/ -maxdepth 1 -type f -name "*.yml" -printf '%f\n' | sed 's/\.\(.\+\)\.yml/\1/g')
+    local projects=$(project list --all)
 
     COMPREPLY=($(compgen -W "$projects" -- "$cur"))
 }

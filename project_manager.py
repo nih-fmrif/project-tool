@@ -239,7 +239,7 @@ def fail(msg):
 def all_projects():
     """ Yields each project name user `username` has access to,
     or all project names if `all` is True."""
-    for dirname in glob.glob(os.path.join(PROJECT_ROOT, '*')):
+    for dirname in sorted(glob.glob(os.path.join(PROJECT_ROOT, '*'))):
         projname = os.path.basename(dirname)
         pdir = project_dir_path(projname)
         pconf = project_conf_path(projname)
