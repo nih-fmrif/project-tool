@@ -326,10 +326,10 @@ def _check_acl(acl, conf):
         return False, "%s needs fixed, owner doesn't have permissions" % conf.project
     for m in conf.members:
         if not member(m) in text:
-            return False, "%s needs fixed, %s doesn't have permissions" % m
+            return False, "%s needs fixed, %s doesn't have permissions" % (conf.project, m)
     for c in conf.collaborators:
         if not collab(c) in text:
-            return False, "%s needs fixed, %s doesn't have permissions" % c
+            return False, "%s needs fixed, %s doesn't have permissions" % (conf.project, c)
 
     if conf.public and not public in text:
         return False, "%s needs fixed, world doesn't have access" % conf.project
