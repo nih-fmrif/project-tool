@@ -1,4 +1,4 @@
-% PANDOC(1) FMRIF User Manuals
+% PROJECT(1) FMRIF User Manuals
 % Joseph Naegele <naegelejd@mail.nih.gov>
 % February 2014
 
