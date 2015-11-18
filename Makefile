@@ -1,5 +1,5 @@
 source := project_manager.py
-completion := project_bash_completion.sh
+completion := project_bash_completion.sh project_zsh_completion.zsh
 
 all: project project.1.gz
 
@@ -14,7 +14,7 @@ install: project $(source) project.1.gz $(completion)
 	install -g 0 -o 0 -m 0644 project.1.gz /usr/local/share/man/man1/
 	install -g 0 -o 0 -m 4755 project /usr/local/bin/
 	install -g 0 -o 0 -m 0744 $(source) /usr/local/lib/
-	[ -d /usr/local/share/bash-completion ] && install -g 0 -o 0 -m 0644 $(completion) /usr/local/share/bash-completion/
+	install -g 0 -o 0 -m 0644 -D $(completion) /usr/local/share/project/
 
 test: $(source)
 	nosetests
