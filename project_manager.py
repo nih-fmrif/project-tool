@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 import os
 import sys
 import pwd
@@ -71,7 +71,7 @@ def load_conf(project_name):
         fail("Failed to read project config file: %s" % path)
 
     try:
-        loaded = yaml.load(contents)
+        loaded = yaml.load(contents, Loader=yaml.FullLoader)
         return ProjectDB(project_name, loaded['owner'], loaded['public'],
                 loaded['members'], loaded['collaborators'])
     except:
